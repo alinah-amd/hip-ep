@@ -201,6 +201,19 @@ class TestQConv:
         _run(model_runner, cin, 32, spatial)
 
     @pytest.mark.parametrize("spatial", [1, 128])
+    @pytest.mark.parametrize("cout", [1, 3, 5, 33])
+    def test_qconv_ragged_out_channels(self, model_runner, spatial, cout):
+        """Cout that leaves a partial last group of output channels.
+
+        A kernel that hands several output channels to one block has a last
+        group that is not full. Over-running it reads past the weight buffer;
+        clamping it to the wrong lane writes one channel's result into
+        another's slot, which leaves the tensor the right shape and the wrong
+        contents.
+        """
+        _run(model_runner, 256, cout, spatial)
+
+    @pytest.mark.parametrize("spatial", [1, 128])
     def test_qconv_unsigned_4bit(self, model_runner, spatial):
         """UINT4 weights: nibbles above 7 widen the other way.
 
