@@ -10,7 +10,13 @@
 # Stage 1 (Build Time): runtime.cpp → bitcode → embedded in library
 # Stage 2 (Model Compilation): Generated MLIR + runtime.bc → optimized DLL
 
-cmake_minimum_required(VERSION 3.18)
+# Higher than the top-level 3.20 because the bitcode custom commands below use
+# add_custom_command(DEPFILE): CMP0116 (depfile paths relative to the current
+# binary dir) arrived in 3.20, and DEPFILE support for the Visual Studio
+# generators -- which is what build.py defaults to on Windows -- only arrived in
+# 3.22. Demanding it here turns an obscure generator-specific failure into a
+# version message.
+cmake_minimum_required(VERSION 3.22)
 
 # ============================================================================
 # STEP 1: Find Required Tools
@@ -183,12 +189,9 @@ macro(compile_to_bitcode SOURCE_FILE OUTPUT_BC)
         endforeach()
     endif()
 
-    # Add implementation directory and collect impl-specific deps. Both
-    # `real/` and `mock/` ship their own `runtime_types.h` (resolved via the
-    # -I flag below), so the DEPENDS list must reference whichever copy the
-    # active build will actually compile against. `cache_utils.h` and the
-    # custom-kernels header only exist for the real GPU runtime.
-    set(IMPL_DEPS "")
+    # Add implementation directory. Both `real/` and `mock/` ship their own
+    # `runtime_types.h`; which copy a TU compiles against is decided by the -I
+    # flag below, and the depfile records whichever one clang actually opened.
     if(NOT BUILD_MOCK_RUNTIME)
         list(APPEND COMPILE_FLAGS "-DHIPDNN_EP_REAL_RUNTIME=1")
         list(APPEND COMPILE_FLAGS "-I" "${CMAKE_CURRENT_SOURCE_DIR}/real")
@@ -208,17 +211,8 @@ macro(compile_to_bitcode SOURCE_FILE OUTPUT_BC)
             list(APPEND COMPILE_FLAGS "-I" "${THEROCK_DIST}/include")
             list(APPEND COMPILE_FLAGS "-D__HIP_PLATFORM_AMD__")
         endif()
-
-        list(APPEND IMPL_DEPS
-            ${CMAKE_CURRENT_SOURCE_DIR}/real/runtime_types.h
-            ${CMAKE_CURRENT_SOURCE_DIR}/real/cache_utils.h
-            ${CMAKE_SOURCE_DIR}/lib/Runtime/Kernels/hip/autotune/gqa/gqa_autotune.h
-            ${CMAKE_CURRENT_SOURCE_DIR}/real/zp_unpack_cache.h
-            ${CMAKE_SOURCE_DIR}/lib/Runtime/Kernels/include/hip_custom_kernels.h)
     else()
         list(APPEND COMPILE_FLAGS "-I" "${CMAKE_CURRENT_SOURCE_DIR}/mock")
-        list(APPEND IMPL_DEPS
-            ${CMAKE_CURRENT_SOURCE_DIR}/mock/runtime_types.h)
     endif()
 
     add_custom_command(
@@ -238,20 +232,24 @@ macro(compile_to_bitcode SOURCE_FILE OUTPUT_BC)
                 $<$<NOT:$<CONFIG:Debug>>:-DNDEBUG>
                 $<$<NOT:$<CONFIG:Debug>>:-D_ITERATOR_DEBUG_LEVEL=0>
                 $<$<NOT:$<CONFIG:Debug>>:-O2>
+                # Header dependencies come from clang, not from a hand-written
+                # list. The manual DEPENDS this replaces was missing 7 directly
+                # included headers -- among them hipdnn_ep_errors.h (80+ TUs),
+                # ck_gemm_select.h and error_check_macros.h -- plus everything
+                # they pull in transitively, such as hip/env.h. Editing one of
+                # those left the stale .bc in place, so the build kept silently
+                # running the old code.
+                -MD -MF ${CMAKE_CURRENT_BINARY_DIR}/${OUTPUT_BC}.d
                 ${COMPILE_FLAGS}
                 ${CMAKE_CURRENT_SOURCE_DIR}/${SOURCE_FILE}
                 -o ${CMAKE_CURRENT_BINARY_DIR}/${OUTPUT_BC}
+        # Only two entries remain: the source itself (the depfile is absent on
+        # the very first build, so nothing else would trigger it) and the
+        # flatbuffers header, which must be *generated* before clang can open
+        # it -- a depfile can only name files a previous compile already read.
         DEPENDS ${SOURCE_FILE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/hipdnn_ep_runtime.h
-                ${CMAKE_SOURCE_DIR}/include/hip/datatype_abi.h
-                ${CMAKE_SOURCE_DIR}/include/hip/init_config_abi.h
-                ${CMAKE_CURRENT_SOURCE_DIR}/runtime_state_internal.h
-                ${CMAKE_CURRENT_SOURCE_DIR}/op_state.h
-                ${CMAKE_CURRENT_SOURCE_DIR}/op_profile.h
-                ${CMAKE_CURRENT_SOURCE_DIR}/chrome_trace.h
-                ${CMAKE_CURRENT_SOURCE_DIR}/debug_log.h
-                ${IMPL_DEPS}
                 ${CMAKE_BINARY_DIR}/schemas/model_metadata_generated.h
+        DEPFILE ${CMAKE_CURRENT_BINARY_DIR}/${OUTPUT_BC}.d
         COMMENT "Compiling ${SOURCE_FILE} to bitcode"
         VERBATIM
         COMMAND_EXPAND_LISTS
