@@ -232,6 +232,21 @@ struct RunArgs {
   float alpha;
 };
 
+// 0 for anything the registry does not serve.
+int64_t elemBytes(int dtype) {
+  switch (dtype) {
+  case HIP_DTYPE_FLOAT16:
+  case HIP_DTYPE_BFLOAT16:
+    return 2;
+  case HIP_DTYPE_FLOAT32:
+    return 4;
+  case HIP_DTYPE_FLOAT64:
+    return 8;
+  default:
+    return 0;
+  }
+}
+
 template <typename CDEOp>
 CDEOp makeCde(float) {
   return CDEOp{};
@@ -390,7 +405,49 @@ extern "C" int hip_ck_gemm_run(void *stream, int instance, const void *A,
   r.batchStrideE = strideD;
   r.alpha = alpha;
 
+  // A buffer load or store reaches memory through an SRD whose range field is
+  // 32 bits, so one launch can address at most 4 GiB per operand. Past that the
+  // range wraps and the kernel runs outside the buffer: on swinv2's window
+  // attention (m=n=256, k=32, batch=49152, E = 6.44 GiB) an E span of exactly
+  // 2^32 completes while 2^32 + 131072 faults, and the damage surfaces on the
+  // following launch rather than the one that caused it. CK accepts these
+  // arguments, so the bound has to be applied here: split the batch until every
+  // launch fits. Shapes already inside the window keep the single launch.
+  const int64_t abBytes = elemBytes(abDtype);
+  const int64_t dBytes = elemBytes(dDtype);
+  if (abBytes == 0 || dBytes == 0) {
+    return 1;
+  }
+  constexpr int64_t kMaxSpanBytes = 0x100000000LL; // 4 GiB
+  int64_t maxBatch = r.batch;
+  const int64_t perBatch[3] = {r.batchStrideA * abBytes,
+                               r.batchStrideB * abBytes,
+                               r.batchStrideE * dBytes};
+  for (int64_t per : perBatch) {
+    if (per <= 0) {
+      continue;
+    }
+    const int64_t lim = kMaxSpanBytes / per;
+    maxBatch = (lim < 1) ? 1 : (lim < maxBatch ? lim : maxBatch);
+  }
+
   try {
+    if (maxBatch < r.batch) {
+      RunArgs seg = r;
+      for (int64_t off = 0; off < r.batch; off += maxBatch) {
+        const int64_t rest = r.batch - off;
+        seg.batch = rest < maxBatch ? rest : maxBatch;
+        seg.a = static_cast<const char *>(r.a) + off * r.batchStrideA * abBytes;
+        seg.b = static_cast<const char *>(r.b) + off * r.batchStrideB * abBytes;
+        seg.e = static_cast<char *>(r.e) + off * r.batchStrideE * dBytes;
+        // The bias is broadcast along the batch, so it keeps its base pointer.
+        const int rc = kEntries[instance].fn(seg);
+        if (rc != 0) {
+          return rc;
+        }
+      }
+      return 0;
+    }
     return kEntries[instance].fn(r);
   } catch (...) {
     return 1;
