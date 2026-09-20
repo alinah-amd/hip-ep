@@ -232,6 +232,45 @@ class TestQConv:
         """
         _run(model_runner, 256, 64, spatial, weight_bits=8, weight_signed=weight_signed)
 
+    @pytest.mark.parametrize("spatial", [1, 128])
+    @pytest.mark.parametrize("cin", [63, 130])
+    def test_qconv_8bit_ragged_in_channels(self, model_runner, spatial, cin):
+        """8-bit weights with a Cin no word width divides.
+
+        Reading weights by the 32-bit word only works when a word never
+        straddles the end of a channel's row, which needs Cin to divide by the
+        elements a word holds -- four at 8 bits, against eight at 4. The 4-bit
+        cases above leave that remainder too, but they cannot catch an element
+        count that is right for nibbles and wrong for bytes.
+        """
+        _run(model_runner, cin, 32, spatial, weight_bits=8)
+
+    # ------------------------------------------------------------------
+    # Tiling: shapes that need more than one tile in each direction.
+    # ------------------------------------------------------------------
+
+    @pytest.mark.parametrize("cout", [200, 256])
+    def test_qconv_tiled_many_tiles(self, model_runner, cout):
+        """Prefill wide enough for several output-channel tiles, ragged or not.
+
+        Every case above is narrow enough to fit one tile of output channels,
+        so the tile index never advances and a wrong stride between tiles
+        cannot show. 256 steps it cleanly; 200 leaves a partial last tile at
+        the same time, which is where an over-run and a mis-clamped tail differ.
+        """
+        _run(model_runner, 256, cout, 128)
+
+    @pytest.mark.parametrize("spatial", [130, 200])
+    def test_qconv_tiled_partial_position_tile(self, model_runner, spatial):
+        """Prefill whose position count leaves a partial last tile.
+
+        The tiled path covers a fixed run of positions per block. At 128 the
+        run divides exactly, so the guard on the last block is never taken with
+        anything else in flight; these sizes give it full tiles to be wrong
+        relative to.
+        """
+        _run(model_runner, 256, 64, spatial)
+
     # ------------------------------------------------------------------
     # Accumulator width.
     # ------------------------------------------------------------------
