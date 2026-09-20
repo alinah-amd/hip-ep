@@ -493,13 +493,13 @@ int wrap_gemm(RuntimeState *state, int op_state_slot, const void *A,
   const int64_t hblA_ld = transB ? K : N;
   const int64_t hblB_ld = transA ? M : K;
 
-  // CK eligibility mirrors the tuned f16 instances: no alpha, ONNX transA==0,
-  // and the A-side transpose (ONNX transB) only together with a bias. `!C ||
-  // use_bias_epilogue` also keeps `output` free of a pre-seeded beta*C, which
-  // ckSelectGemmInstance relies on when it times into `output`.
+  // CK eligibility mirrors the tuned f16 instances: no alpha and ONNX
+  // transA==0, which would become the kernels' TRANSB and has no instance.
+  // The A-side transpose (ONNX transB) is served with or without a bias.
+  // `!C || use_bias_epilogue` also keeps `output` free of a pre-seeded beta*C,
+  // which ckSelectGemmInstance relies on when it times into `output`.
   const bool ck_eligible = typeCode == kTypeFloat16 && alpha == 1.0f &&
-                           transA == 0 && (!C || use_bias_epilogue) &&
-                           (transB == 0 || use_bias_epilogue);
+                           transA == 0 && (!C || use_bias_epilogue);
   const void *ck_bias = use_bias_epilogue ? C : nullptr;
 
   GemmCacheKey key{
