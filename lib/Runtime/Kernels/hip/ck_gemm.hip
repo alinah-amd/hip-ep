@@ -431,6 +431,12 @@ extern "C" int hip_ck_gemm_run(void *stream, int instance, const void *A,
     maxBatch = (lim < 1) ? 1 : (lim < maxBatch ? lim : maxBatch);
   }
 
+  // CK checks hipGetLastError() after each launch, which reports whatever
+  // error is pending on the thread rather than only this launch's. Consume a
+  // pending one so an unrelated caller's handled failure cannot be read as
+  // this shape being unsupported.
+  (void)hipGetLastError();
+
   try {
     if (maxBatch < r.batch) {
       RunArgs seg = r;
