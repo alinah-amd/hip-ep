@@ -201,17 +201,26 @@ int wrap_hipblasLtMatmul(RuntimeState *state, int op_state_slot, const void *A,
             /*strideA=*/b_batch_stride, /*strideB=*/M * K, /*strideD=*/M * N);
       }
       entry->resolved.store(true, std::memory_order_release);
+      // ck_instance=-1 is reserved for a shape CK was offered and refused, so
+      // that grepping it reports coverage gaps rather than the dtypes and
+      // transposes the registry never serves.
       if (entry->use_gemv) {
         RUNTIME_DEBUG_LOG(
             "[MATMUL] resolved M=%lld N=%lld K=%lld batch=%lld -> "
             "gemv\n",
             (long long)M, (long long)N, (long long)K, (long long)batch_count);
-      } else {
+      } else if (ck_eligible) {
         RUNTIME_DEBUG_LOG(
             "[MATMUL] resolved M=%lld N=%lld K=%lld batch=%lld -> "
             "ck_instance=%d\n",
             (long long)M, (long long)N, (long long)K, (long long)batch_count,
             entry->ck_instance);
+      } else {
+        RUNTIME_DEBUG_LOG(
+            "[MATMUL] resolved M=%lld N=%lld K=%lld batch=%lld -> "
+            "ref (elem_size=%lld transA=%lld)\n",
+            (long long)M, (long long)N, (long long)K, (long long)batch_count,
+            (long long)elem_size, (long long)transA);
       }
     }
   }

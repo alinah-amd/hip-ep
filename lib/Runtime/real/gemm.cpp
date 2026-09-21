@@ -532,10 +532,23 @@ int wrap_gemm(RuntimeState *state, int op_state_slot, const void *A,
       cached = table.map.try_emplace(key, entry).first->second;
     }
     have_cached = true;
-    RUNTIME_DEBUG_LOG("[REAL] wrap_gemm: resolved M=%lld N=%lld K=%lld "
-                      "transA=%lld transB=%lld -> ck_instance=%d\n",
-                      (long long)M, (long long)N, (long long)K,
-                      (long long)transA, (long long)transB, cached.ck_instance);
+    // ck_instance=-1 is reserved for a shape CK was offered and refused, so
+    // that grepping it reports coverage gaps rather than the dtypes, alphas
+    // and residual C shapes the registry never serves.
+    if (ck_eligible) {
+      RUNTIME_DEBUG_LOG("[REAL] wrap_gemm: resolved M=%lld N=%lld K=%lld "
+                        "transA=%lld transB=%lld -> ck_instance=%d\n",
+                        (long long)M, (long long)N, (long long)K,
+                        (long long)transA, (long long)transB,
+                        cached.ck_instance);
+    } else {
+      RUNTIME_DEBUG_LOG("[REAL] wrap_gemm: resolved M=%lld N=%lld K=%lld "
+                        "transA=%lld transB=%lld -> ref (typeCode=%lld "
+                        "alpha=%f bias_epilogue=%d)\n",
+                        (long long)M, (long long)N, (long long)K,
+                        (long long)transA, (long long)transB,
+                        (long long)typeCode, alpha, (int)use_bias_epilogue);
+    }
   }
 
   if (cached.ck_instance >= 0) {
