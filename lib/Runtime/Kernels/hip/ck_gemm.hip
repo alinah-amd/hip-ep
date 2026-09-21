@@ -104,6 +104,14 @@ static constexpr auto V3        = ck::BlockGemmPipelineVersion::v3;
         S<4, 32, 1>, S<0, 2, 1>, S<0, 2, 1>, 1, 2, 8, 1, 1, 1, S<1, 32, 1, 4>,             \
         S<EV, 8, 8>, Intrawave, V1
 
+// Not from CK's list: MPerBlock 64 with NPerBlock left at 128, so a shape whose
+// whole N' fits inside one tile still reads A once but spreads over twice the
+// workgroups. Serves attention's A @ V, where N' is the head dim.
+#define TKN_M64(EV)                                                                         \
+    256, 64, 128, 64, 8, 8, 16, 16, 2, 2, S<8, 32, 1>, S<1, 0, 2>, S<1, 0, 2>, 2, 8, 8, 0,  \
+        S<8, 32, 1>, S<0, 2, 1>, S<0, 2, 1>, 1, 1, 8, 0, 1, 1, S<1, 32, 1, 8>, S<EV, 8, 8>, \
+        Intrawave, V1
+
 // A Row / B Col.
 #define TNK_1(EV)                                                                           \
     256, 128, 128, 32, 8, 8, 16, 16, 4, 2, S<4, 64, 1>, S<1, 0, 2>, S<1, 0, 2>, 2, 8, 8, 1, \
@@ -320,27 +328,27 @@ struct Entry {
 #define ENT_E(TILE) {kTN_F16, &runNoBias<OP_E(TILE), PassThrough>},
 
 const Entry kEntries[] = {
-    // 0-12: NN, f16 out, no bias
+    // 0-13: NN, f16 out, no bias
     ENT_A(TKN_1) ENT_A(TKN_2) ENT_A(TKN_3) ENT_A(TKN_4) ENT_A(TKN_5)
     ENT_A(TKN_6) ENT_A(TKN_7) ENT_A(TKN_8) ENT_A(TKN_A1a) ENT_A(TKN_A1b)
-    ENT_A(TKN_E4a) ENT_A(TKN_E2a) ENT_A(TKN_E1a)
+    ENT_A(TKN_E4a) ENT_A(TKN_E2a) ENT_A(TKN_E1a) ENT_A(TKN_M64)
 
-    // 13-25: TN, f32 out, Scale
+    // 14-26: TN, f32 out, Scale
     ENT_B(TNK_1) ENT_B(TNK_2) ENT_B(TNK_3) ENT_B(TNK_4) ENT_B(TNK_5)
     ENT_B(TNK_6) ENT_B(TNK_7) ENT_B(TNK_8) ENT_B(TNK_E2a) ENT_B(TNK_E2b)
     ENT_B(TNK_E1a) ENT_B(TNK_E1b) ENT_B(TNK_K4)
 
-    // 26-36: TN, f16 out, bias
+    // 27-37: TN, f16 out, bias
     ENT_C(TNK_1) ENT_C(TNK_2) ENT_C(TNK_3) ENT_C(TNK_4) ENT_C(TNK_5)
     ENT_C(TNK_6) ENT_C(TNK_7) ENT_C(TNK_8) ENT_C(TNK_K4)
     ENT_C(TNK_E2a) ENT_C(TNK_E1a)
 
-    // 37-47: NN, f16 out, bias
+    // 38-48: NN, f16 out, bias
     ENT_D(TKN_1) ENT_D(TKN_2) ENT_D(TKN_3) ENT_D(TKN_4) ENT_D(TKN_5)
     ENT_D(TKN_6) ENT_D(TKN_7) ENT_D(TKN_8)
     ENT_D(TKN_E4a) ENT_D(TKN_E2a) ENT_D(TKN_E1a)
 
-    // 48-57: TN, f16 out, no bias. This is the Q @ K^T that
+    // 49-58: TN, f16 out, no bias. This is the Q @ K^T that
     // TransposeMatMulFold stamps as hipdnn.transB on a plain MatMul; hipBLASLt
     // served it directly, so without these entries the whole attention score
     // GEMM of every folded model falls to the reference kernel.
